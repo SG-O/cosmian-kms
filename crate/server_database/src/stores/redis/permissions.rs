@@ -6,13 +6,14 @@ use std::{
 use async_trait::async_trait;
 use cloudproof_findex::{
     IndexedValue, Keyword, Location,
-    implementations::redis::{FindexRedis, FindexRedisError, RemovedLocationsFinder},
+    implementations::redis::{FindexRedisError, RemovedLocationsFinder},
     parameters::MASTER_KEY_LENGTH,
 };
 use cosmian_crypto_core::{FixedSizeCBytes, SymmetricKey};
+use cosmian_findex::IndexADT;
 use cosmian_kmip::kmip_2_1::KmipOperation;
 
-use crate::{DbError, error::DbResult};
+use crate::{DbError, error::DbResult, stores::redis::redis_with_findex::FindexRedis};
 
 /// The struct we store for each permission.
 /// We store the permission itself as a Location.
@@ -132,11 +133,7 @@ impl PermissionsDB {
     ) -> DbResult<HashSet<Triple>> {
         let keyword = Keyword::from(format!("p::{keyword}").as_bytes());
         self.findex
-            .search(
-                &findex_key.to_bytes(),
-                &self.label,
-                HashSet::from([keyword.clone()]),
-            )
+            .search(HashSet::from([keyword.clone()]))
             .await?
             .into_iter()
             .next()
@@ -224,12 +221,7 @@ impl PermissionsDB {
         //upsert the index
         let new_keywords = self
             .findex
-            .upsert(
-                &findex_key.to_bytes(),
-                &self.label,
-                additions,
-                HashMap::new(),
-            )
+            .upsert(&findex_key.to_bytes(), additions, HashMap::new())
             .await?;
         let is_already_present = !new_keywords.contains(&keyword);
         if is_already_present {
