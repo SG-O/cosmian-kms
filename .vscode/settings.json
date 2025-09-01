@@ -12,6 +12,7 @@
     "Cosmian",
     "covercrypt",
     "Covercrypt",
+    "DBSIZE",
     "ECDH",
     "ecies",
     "ECIES",
@@ -21,6 +22,7 @@
     "gpsw",
     "Gpsw",
     "jwks",
+    "keccak",
     "keypair",
     "kmip",
     "KMIP",
@@ -34,6 +36,7 @@
     "plaintexts",
     "postgres",
     "postgresql",
+    "Proteccio",
     "recv",
     "repr",
     "Seedable",
@@ -41,6 +44,7 @@
     "sqlcipher",
     "sqlite",
     "Sqlite",
+    "sqlx",
     "structopt",
     "TFHE",
     "thiserror",
@@ -90,5 +94,8 @@
       "name": "test"
     }
   ],
-  "sqltools.useNodeRuntime": true
+  "sqltools.useNodeRuntime": true,
+  "rust-analyzer.cargo.features": [
+    "non-fips"
+  ],
 }

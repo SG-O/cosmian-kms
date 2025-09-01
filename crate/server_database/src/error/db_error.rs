@@ -1,13 +1,15 @@
 use std::array::TryFromSliceError;
 
 #[cfg(feature = "non-fips")]
-use cloudproof_findex::implementations::redis::FindexRedisError;
+use cosmian_findex::Error as FindexError;
 use cosmian_crypto_core::CryptoCoreError;
 use cosmian_kmip::{
     KmipError, kmip_0::kmip_types::ErrorReason, kmip_1_4::kmip_types::ResultReason,
 };
 use cosmian_kms_crypto::CryptoError;
 use cosmian_kms_interfaces::InterfaceError;
+#[cfg(feature = "non-fips")]
+use cosmian_sse_memories::{ADDRESS_LENGTH, Address, RedisMemoryError};
 use redis::ErrorKind;
 use thiserror::Error;
 
@@ -98,6 +100,14 @@ pub enum DbError {
 
     #[error("Invalid URL: {0}")]
     UrlError(String),
+
+    #[cfg(feature = "non-fips")]
+    #[error("Findex internal error: {0}")]
+    RedisFindex(#[from] FindexError<Address<ADDRESS_LENGTH>>),
+
+    #[cfg(feature = "non-fips")]
+    #[error("Redis-Memory error: {0}")]
+    RedisMemory(#[from] RedisMemoryError),
 }
 
 impl From<std::string::FromUtf8Error> for DbError {
@@ -188,13 +198,6 @@ impl From<CryptoError> for DbError {
             CryptoError::Covercrypt(e) => CryptographicError(e.to_string()),
             CryptoError::TryFromSliceError(e) => CryptographicError(e.to_string()),
         }
-    }
-}
-
-#[cfg(feature = "non-fips")]
-impl From<FindexRedisError> for DbError {
-    fn from(e: FindexRedisError) -> Self {
-        Self::Findex(e.to_string())
     }
 }
 
