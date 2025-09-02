@@ -1,6 +1,7 @@
 use std::{collections::HashSet, sync::Arc};
 
 use async_trait::async_trait;
+use cloudproof_findex::implementations::redis::FindexRedisError;
 use cosmian_crypto_core::{
     CsRng, RandomFixedSizeCBytes, SymmetricKey,
     reexport::rand_core::{RngCore, SeedableRng},
@@ -19,7 +20,7 @@ use tracing::trace;
 use crate::{
     error::DbResult,
     stores::redis::{
-        findex::Value,
+        findex::IndexedValue,
         objects_db::{ObjectsDB, RedisDbObject},
         permissions::PermissionsDB,
         redis_with_findex::FindexRedis,
@@ -33,8 +34,8 @@ use crate::{
 trait RemovedValuesFinder {
     async fn find_removed_values(
         &self,
-        _values: HashSet<Value>,
-    ) -> Result<HashSet<Value>, FindexRedisError>;
+        _values: HashSet<IndexedValue>,
+    ) -> Result<HashSet<IndexedValue>, FindexRedisError>;
 }
 
 struct DummyDB;
@@ -42,8 +43,8 @@ struct DummyDB;
 impl RemovedValuesFinder for DummyDB {
     async fn find_removed_values(
         &self,
-        _values: HashSet<Value>,
-    ) -> Result<HashSet<Value>, FindexRedisError> {
+        _values: HashSet<IndexedValue>,
+    ) -> Result<HashSet<IndexedValue>, FindexRedisError> {
         Ok(HashSet::new())
     }
 }
@@ -343,7 +344,7 @@ pub(crate) async fn test_corner_case() -> DbResult<()> {
     // create the findex
     let findex =
         Arc::new(FindexRedis::connect_with_manager(mgr.clone(), Arc::new(DummyDB {})).await?);
-    let permissions_db = PermissionsDB::new(findex, label);
+    let permissions_db = PermissionsDB::new(findex);
 
     // remove a permission that does not exist
     permissions_db
