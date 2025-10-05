@@ -27,6 +27,8 @@ use crate::{
 
 #[tokio::test]
 async fn test_re_key_with_tags() -> KResult<()> {
+    cosmian_logger::log_init(None);
+
     let app = test_utils::test_app(None, None).await;
     // create Key Pair
     let mkp_tag = "mkp";
@@ -73,7 +75,10 @@ async fn test_re_key_with_tags() -> KResult<()> {
     let _encrypted_data = encrypt_response
         .data
         .expect("There should be encrypted data");
-
+    test_utils::revoke(&app, private_key_unique_identifier).await?;
+    test_utils::revoke(&app, public_key_unique_identifier).await?;
+    test_utils::destroy(&app, private_key_unique_identifier).await?;
+    test_utils::destroy(&app, public_key_unique_identifier).await?;
     Ok(())
 }
 

@@ -8,7 +8,7 @@ use serde::{
 };
 use strum::VariantNames;
 
-use super::{
+pub use super::{
     kmip_data_structures::KeyBlock,
     kmip_types::{ObjectType, OpaqueDataType, ResultReason, SplitKeyMethod},
 };

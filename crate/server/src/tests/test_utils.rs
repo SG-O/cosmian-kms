@@ -1,23 +1,10 @@
 #![allow(clippy::unwrap_used, clippy::print_stdout, clippy::expect_used)]
 
 use std::{
+    env,
     path::{Path, PathBuf},
     sync::Arc,
 };
-
-use actix_http::Request;
-use actix_web::{
-    App,
-    body::MessageBody,
-    dev::{Service, ServiceResponse},
-    http::StatusCode,
-    test::{self, call_service, read_body},
-    web::{self, Data},
-};
-use cosmian_kms_server_database::reexport::cosmian_kmip::ttlv::{TTLV, from_ttlv, to_ttlv};
-use cosmian_logger::info;
-use serde::{Serialize, de::DeserializeOwned};
-use time::{OffsetDateTime, format_description::well_known::Iso8601};
 
 use super::google_cse::utils::google_cse_auth;
 use crate::{
@@ -30,14 +17,37 @@ use crate::{
     routes,
     start_kms_server::handle_google_cse_rsa_keypair,
 };
+use actix_http::Request;
+use actix_web::{
+    App,
+    body::MessageBody,
+    dev::{Service, ServiceResponse},
+    http::StatusCode,
+    test::{self, call_service, read_body},
+    web::{self, Data},
+};
+use cosmian_kms_client_utils::reexport::cosmian_kmip::kmip_0::kmip_types::{
+    RevocationReason, RevocationReasonCode,
+};
+use cosmian_kms_client_utils::reexport::cosmian_kmip::kmip_2_1::kmip_operations::{
+    Destroy, DestroyResponse, Revoke, RevokeResponse,
+};
+use cosmian_kms_client_utils::reexport::cosmian_kmip::kmip_2_1::kmip_types::UniqueIdentifier;
+use cosmian_kms_server_database::reexport::cosmian_kmip::ttlv::{TTLV, from_ttlv, to_ttlv};
+use cosmian_logger::{info, trace};
+use serde::{Serialize, de::DeserializeOwned};
+use time::{OffsetDateTime, format_description::well_known::Iso8601};
+use tracing::warn;
 
 pub(crate) fn https_clap_config() -> ClapConfig {
-    https_clap_config_opts(None)
+    https_clap_config_opts(None, None)
 }
 
-pub(crate) fn https_clap_config_opts(kms_public_url: Option<String>) -> ClapConfig {
-    let sqlite_path = get_tmp_sqlite_path();
-
+pub(crate) fn https_clap_config_opts(
+    kms_public_url: Option<String>,
+    kms_kek: Option<String>,
+) -> ClapConfig {
+    let db_config = get_db_config();
     ClapConfig {
         socket_server: SocketServerConfig {
             socket_server_start: true,
@@ -53,13 +63,7 @@ pub(crate) fn https_clap_config_opts(kms_public_url: Option<String>) -> ClapConf
             )),
             tls_cipher_suites: None,
         },
-        db: MainDBConfig {
-            database_type: Some("sqlite".to_owned()),
-            database_url: None,
-            sqlite_path,
-            clear_database: false,
-            ..Default::default()
-        },
+        db: db_config,
         kms_public_url,
         google_cse_config: GoogleCseConfig {
             google_cse_enable: true,
@@ -67,7 +71,81 @@ pub(crate) fn https_clap_config_opts(kms_public_url: Option<String>) -> ClapConf
             google_cse_incoming_url_whitelist: None,
             google_cse_migration_key: None,
         },
+        key_encryption_key: kms_kek,
         ..Default::default()
+    }
+}
+
+fn sqlite_db_config() -> MainDBConfig {
+    trace!("TESTS: using sqlite");
+    let sqlite_path = get_tmp_sqlite_path();
+    MainDBConfig {
+        database_type: Some("sqlite".to_owned()),
+        clear_database: false,
+        sqlite_path,
+        ..MainDBConfig::default()
+    }
+}
+
+fn mysql_db_config() -> MainDBConfig {
+    trace!("TESTS: using mysql");
+    let mysql_url = option_env!("KMS_MYSQL_URL")
+        .unwrap_or("mysql://kms:kms@localhost:3306/kms")
+        .to_owned();
+    MainDBConfig {
+        database_type: Some("mysql".to_owned()),
+        clear_database: false,
+        database_url: Some(mysql_url),
+        ..MainDBConfig::default()
+    }
+}
+
+fn postgres_db_config() -> MainDBConfig {
+    trace!("TESTS: using postgres");
+    let postgresql_url = option_env!("KMS_POSTGRES_URL")
+        .unwrap_or("postgresql://kms:kms@127.0.0.1:5432/kms")
+        .to_owned();
+    MainDBConfig {
+        database_type: Some("postgresql".to_owned()),
+        clear_database: false,
+        database_url: Some(postgresql_url),
+        ..MainDBConfig::default()
+    }
+}
+
+#[cfg(feature = "non-fips")]
+fn redis_findex_db_config() -> MainDBConfig {
+    trace!("TESTS: using redis-findex");
+    let url = env::var("REDIS_HOST").map_or_else(
+        |_| "redis://localhost:6379".to_owned(),
+        |var_env| format!("redis://{var_env}:6379"),
+    );
+    MainDBConfig {
+        database_type: Some("redis-findex".to_owned()),
+        clear_database: false,
+        unwrapped_cache_max_age: 15,
+        database_url: Some(url),
+        sqlite_path: PathBuf::default(),
+        redis_master_password: Some("password".to_owned()),
+        redis_findex_label: Some("label".to_owned()),
+    }
+}
+
+fn get_db_config() -> MainDBConfig {
+    match env::var_os("KMS_TEST_DB") {
+        Some(var) => {
+            let Some(db_type) = var.to_str() else {
+                return sqlite_db_config();
+            };
+            match db_type {
+                #[cfg(feature = "non-fips")]
+                "redis-findex" => redis_findex_db_config(),
+                "mysql" => mysql_db_config(),
+                "postgresql" => postgres_db_config(),
+                _ => sqlite_db_config(),
+            }
+        }
+        None => sqlite_db_config(),
     }
 }
 
@@ -111,7 +189,7 @@ pub(crate) async fn test_app(
     kms_public_url: Option<String>,
     privileged_users: Option<Vec<String>>,
 ) -> impl Service<Request, Response = ServiceResponse<impl MessageBody>, Error = actix_web::Error> {
-    let clap_config = https_clap_config_opts(kms_public_url);
+    let clap_config = https_clap_config_opts(kms_public_url, None);
 
     let server_params =
         Arc::new(ServerParams::try_from(clap_config).expect("cannot create server params"));
@@ -232,4 +310,50 @@ where
     }
     let body = read_body(res).await;
     Ok(serde_json::from_slice(&body)?)
+}
+
+pub(crate) async fn revoke<B, S>(app: &S, key_uid: &UniqueIdentifier) -> KResult<()>
+where
+    S: Service<Request, Response = ServiceResponse<B>, Error = actix_web::Error>,
+    B: MessageBody,
+{
+    let revoke_request = Revoke {
+        unique_identifier: Some(key_uid.clone()),
+        revocation_reason: RevocationReason {
+            revocation_reason_code: RevocationReasonCode::Unspecified,
+            revocation_message: Some("revoke".to_owned()),
+        },
+        compromise_occurrence_date: None,
+    };
+    let revoke_response: RevokeResponse =
+        post_2_1(&app, &revoke_request)
+            .await
+            .unwrap_or_else(|_| RevokeResponse {
+                unique_identifier: UniqueIdentifier::TextString(String::new()),
+            });
+    if revoke_response.unique_identifier != key_uid.clone() {
+        warn!("Failed to revoke key with uid: {:?}", key_uid);
+    }
+    Ok(())
+}
+
+pub(crate) async fn destroy<B, S>(app: &S, key_uid: &UniqueIdentifier) -> KResult<()>
+where
+    S: Service<Request, Response = ServiceResponse<B>, Error = actix_web::Error>,
+    B: MessageBody,
+{
+    let destroy_request = Destroy {
+        unique_identifier: Some(key_uid.clone()),
+        remove: true,
+    };
+    let destroy_response: DestroyResponse =
+        post_2_1(&app, &destroy_request)
+            .await
+            .unwrap_or_else(|_| DestroyResponse {
+                unique_identifier: UniqueIdentifier::TextString(String::new()),
+            });
+    if destroy_response.unique_identifier != key_uid.clone() {
+        warn!("Failed to destroy key with uid: {:?}", key_uid);
+    }
+    Ok(())
 }

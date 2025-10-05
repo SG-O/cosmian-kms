@@ -265,9 +265,10 @@ async fn test_create_transparent_symmetric_key() -> KResult<()> {
 
     let kms = Arc::new(KMS::instantiate(Arc::new(ServerParams::try_from(clap_config)?)).await?);
     let owner = "eyJhbGciOiJSUzI1Ni";
+    let uuid = Uuid::new_v4().to_string();
 
     let request = symmetric_key_create_request(
-        Some(UniqueIdentifier::TextString("sym_key_id".to_owned())),
+        Some(UniqueIdentifier::TextString(uuid.clone())),
         256,
         CryptographicAlgorithm::AES,
         EMPTY_TAGS,
@@ -289,7 +290,7 @@ async fn test_create_transparent_symmetric_key() -> KResult<()> {
     );
     // Check key UID has been setup
     assert_eq!(
-        "sym_key_id".to_owned(),
+        uuid,
         response
             .unique_identifier
             .as_str()

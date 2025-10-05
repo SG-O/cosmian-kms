@@ -210,6 +210,9 @@ async fn test_kmip_messages() -> KResult<()> {
 
     // prepare and send the single message
     let batch_item = vec![
+        RequestMessageBatchItemVersioned::V21(RequestMessageBatchItem::new(Operation::Locate(
+            Box::default(),
+        ))),
         RequestMessageBatchItemVersioned::V21(RequestMessageBatchItem::new(
             Operation::CreateKeyPair(Box::new(ec_create_request)),
         )),
@@ -241,11 +244,31 @@ async fn test_kmip_messages() -> KResult<()> {
     debug!("message_request: {:#?}", to_ttlv(&message_request));
 
     let response = kms.message(message_request, owner, None).await?;
-    assert_eq!(response.response_header.batch_count, 3);
-    assert_eq!(response.batch_item.len(), 3);
+    assert_eq!(response.response_header.batch_count, 4);
+    assert_eq!(response.batch_item.len(), 4);
 
-    // 1. Create keypair
+    // 1. Locate before
     let ResponseMessageBatchItemVersioned::V21(batch_item) = &response.batch_item[0] else {
+        panic!("not a V21 response");
+    };
+    assert_eq!(batch_item.operation, Some(OperationEnumeration::Locate));
+    assert_eq!(
+        batch_item.result_status,
+        ResultStatusEnumeration::Success,
+        "result_status: {:?}, result_message: {:?}, result_reason: {:?}",
+        batch_item.result_status,
+        batch_item.result_message,
+        batch_item.result_reason
+    );
+    let Some(Operation::LocateResponse(locate_response)) = &batch_item.response_payload else {
+        panic!("not a locate response payload");
+    };
+    let before = locate_response
+        .located_items
+        .unwrap_or_else(|| panic!("failed to get located items count"));
+
+    // 2. Create keypair
+    let ResponseMessageBatchItemVersioned::V21(batch_item) = &response.batch_item[1] else {
         panic!("not a V21 response");
     };
     assert_eq!(
@@ -259,8 +282,8 @@ async fn test_kmip_messages() -> KResult<()> {
         panic!("not a create key pair response payload");
     };
 
-    // 2. Locate
-    let ResponseMessageBatchItemVersioned::V21(batch_item) = &response.batch_item[1] else {
+    // 3. Locate after
+    let ResponseMessageBatchItemVersioned::V21(batch_item) = &response.batch_item[2] else {
         panic!("not a V21 response");
     };
     assert_eq!(batch_item.operation, Some(OperationEnumeration::Locate));
@@ -277,14 +300,14 @@ async fn test_kmip_messages() -> KResult<()> {
     };
     // locate response contains only 2 keys, the pair that was created
     // by the first batch item, because processing is sequential and order is preserved
-    assert_eq!(locate_response.located_items, Some(2));
+    assert!(locate_response.located_items >= Some(before + 2)); //because of race conditions equals may fail
     let locate_uids = locate_response.unique_identifier.clone().unwrap();
-    assert_eq!(locate_uids.len(), 2);
+    assert!(locate_uids.len() >= usize::try_from(before + 2).unwrap_or(0)); //because of race conditions equals may fail
     assert!(locate_uids.contains(&create_keypair_response.private_key_unique_identifier));
     assert!(locate_uids.contains(&create_keypair_response.public_key_unique_identifier));
 
     // 3. Decrypt (that failed)
-    let ResponseMessageBatchItemVersioned::V21(batch_item) = &response.batch_item[2] else {
+    let ResponseMessageBatchItemVersioned::V21(batch_item) = &response.batch_item[3] else {
         panic!("not a V21 response");
     };
 

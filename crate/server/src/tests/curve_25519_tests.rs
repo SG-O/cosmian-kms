@@ -49,10 +49,11 @@ async fn test_curve_25519() -> KResult<()> {
 
     let kms = Arc::new(KMS::instantiate(Arc::new(ServerParams::try_from(clap_config)?)).await?);
     let owner = Uuid::new_v4().to_string();
+    let uuid = Uuid::new_v4().to_string();
 
     // request key pair creation
     let request = create_ec_key_pair_request(
-        Some(UniqueIdentifier::TextString("ec_sk_uid".to_owned())),
+        Some(UniqueIdentifier::TextString(uuid.clone())),
         EMPTY_TAGS,
         RecommendedCurve::CURVE25519,
         false,
@@ -77,7 +78,7 @@ async fn test_curve_25519() -> KResult<()> {
         .unique_identifier
         .as_str()
         .context("no string for the unique_identifier")?;
-    assert_eq!(sk_uid, "ec_sk_uid".to_owned());
+    assert_eq!(sk_uid, uuid);
     let sk = &sk_response.object;
     let sk_key_block = match sk {
         Object::PrivateKey(PrivateKey { key_block }) => key_block.clone(),
